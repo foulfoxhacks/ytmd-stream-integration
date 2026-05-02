@@ -3,16 +3,16 @@
 // Routes verified against:
 //   https://github.com/th-ch/youtube-music/blob/master/src/plugins/api-server/backend/routes/control.ts
 //   https://github.com/th-ch/youtube-music/blob/master/src/plugins/api-server/backend/routes/auth.ts
-
+ 
 const API = '/api/v1';
-
+ 
 export class YTMDClient {
   constructor({ host, token }) {
     if (!host) throw new Error('YTMDClient: host is required');
     this.host = host.replace(/\/+$/, '');
     this.token = token || '';
   }
-
+ 
   /**
    * Request a JWT for the given clientId.
    * The user must approve the popup in Pear Desktop the first time.
@@ -28,7 +28,7 @@ export class YTMDClient {
     if (!body.accessToken) throw new Error('Auth response missing accessToken');
     return body.accessToken;
   }
-
+ 
   async #req(method, path, body) {
     const res = await fetch(`${this.host}${path}`, {
       method,
@@ -46,7 +46,7 @@ export class YTMDClient {
     const ct = res.headers.get('content-type') || '';
     return ct.includes('application/json') ? res.json() : res.text();
   }
-
+ 
   // --- Search ---
   // POST /api/v1/search { query, params?, continuation? }
   // Returns the raw YouTube Music search response. We dig out the first
@@ -55,7 +55,7 @@ export class YTMDClient {
     const data = await this.#req('POST', `${API}/search`, { query });
     return data;
   }
-
+ 
   /**
    * Search and return the first usable {videoId, title, artist, durationSec}
    * or null if nothing matched.
@@ -64,46 +64,67 @@ export class YTMDClient {
     const data = await this.search(query);
     return extractFirstSong(data);
   }
-
+ 
   // --- Queue ---
   async addToQueue(videoId, { insertPosition = 'INSERT_AT_END' } = {}) {
     return this.#req('POST', `${API}/queue`, { videoId, insertPosition });
   }
-
+ 
   async getQueue() {
-    return this.#req('GET', `${API}/queue`);
+    try {
+      return await this.#req('GET', `${API}/queue`);
+    } catch (err) {
+      // 204/404 from YTMD when queue is empty; bubble up as null
+      if (/->\s*4(?:0[34]|1\d)/.test(err.message)) return null;
+      throw err;
+    }
   }
-
+ 
   async getCurrentSong() {
     return this.#req('GET', `${API}/song`);
   }
-
+ 
   async getNextSong() {
-    return this.#req('GET', `${API}/queue/next`);
+    try {
+      return await this.#req('GET', `${API}/queue/next`);
+    } catch (err) {
+      // YTMD returns non-200 when the queue has no "next" song. Treat as null.
+      if (/->\s*4(?:0[34]|1\d)/.test(err.message)) return null;
+      throw err;
+    }
   }
-
+ 
   async next() {
     return this.#req('POST', `${API}/next`);
   }
-
+ 
   // DELETE /api/v1/queue/{index}
   async removeFromQueue(index) {
     return this.#req('DELETE', `${API}/queue/${encodeURIComponent(index)}`);
   }
 }
-
+ 
 /**
- * Walk a YouTube Music searchResponse and pick the first item that has a videoId
- * and looks like a song. The shape is YouTube's internal renderer JSON; we
- * defensively scan because it changes occasionally.
+ * Walk a YouTube Music searchResponse and pick the best song result.
+ *
+ * The response contains multiple sections:
+ *   - "Top result"   (often a video / album / artist — UNRELIABLE for queue add)
+ *   - "Songs"        (real YouTube Music songs — what we want)
+ *   - "Videos"       (regular YouTube videos — sometimes fail to queue)
+ *   - "Albums"       (no playable videoId)
+ *
+ * Strategy: collect every musicResponsiveListItemRenderer, score each one,
+ * and pick the highest-scoring item. Items that look like proper songs
+ * (have a parseable duration AND a clean "Artist • Album • 3:33"-style
+ * subtitle) score higher than top-result blobs that have view counts in
+ * the subtitle ("4.9M views").
  */
 export function extractFirstSong(data) {
   if (!data || typeof data !== 'object') return null;
-
+ 
   const found = [];
   walk(data, (node) => {
     if (!node || typeof node !== 'object') return;
-    // musicResponsiveListItemRenderer is the standard "row" in a search result.
     if (node.musicResponsiveListItemRenderer) {
       const r = node.musicResponsiveListItemRenderer;
       const videoId =
@@ -112,14 +133,35 @@ export function extractFirstSong(data) {
           ?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
       if (!videoId) return;
       const title = textFromRuns(r.flexColumns?.[0]);
-      const artistish = textFromRuns(r.flexColumns?.[1]);
+      const subtitle = textFromRuns(r.flexColumns?.[1]);
       const durationSec = parseDurationFromColumns(r.flexColumns);
-      found.push({ videoId, title: title || '(unknown)', artist: artistish || '', durationSec });
+ 
+      // Score this candidate. Higher is better.
+      let score = 0;
+      if (durationSec > 0) score += 10;             // real songs always have a duration
+      if (/views?\b/i.test(subtitle)) score -= 5;   // "4.9M views" -> regular video
+      if (/\bSong\b/i.test(subtitle)) score += 5;   // "Song • Artist • Album" subtitle
+      if (subtitle.split('•').length >= 2) score += 2; // formatted song subtitle
+      // Strip the duration off the end of the subtitle so it doesn't get
+      // displayed as part of the artist name.
+      const artist = subtitle
+        .replace(/\s*•\s*\d{1,2}:\d{2}(?::\d{2})?\s*$/, '')
+        .replace(/\s*•\s*[\d.]+[KMB]?\s+views?\s*$/i, '')
+        .replace(/^Song\s*•\s*/i, '')
+        .trim();
+ 
+      found.push({ videoId, title: title || '(unknown)', artist, durationSec, score });
     }
   });
-  return found[0] || null;
+ 
+  if (found.length === 0) return null;
+  // Pick the highest-scoring candidate; on tie keep first-seen order.
+  found.sort((a, b) => b.score - a.score);
+  const best = found[0];
+  // Don't expose `score` to callers.
+  return { videoId: best.videoId, title: best.title, artist: best.artist, durationSec: best.durationSec };
 }
-
+ 
 function walk(node, visit, seen = new WeakSet()) {
   if (!node || typeof node !== 'object') return;
   if (seen.has(node)) return;
@@ -129,7 +171,7 @@ function walk(node, visit, seen = new WeakSet()) {
     walk(node[key], visit, seen);
   }
 }
-
+ 
 function textFromRuns(column) {
   const runs =
     column?.musicResponsiveListItemFlexColumnRenderer?.text?.runs ||
@@ -137,7 +179,7 @@ function textFromRuns(column) {
   if (!Array.isArray(runs)) return '';
   return runs.map((r) => r.text || '').join('').trim();
 }
-
+ 
 function parseDurationFromColumns(columns) {
   if (!Array.isArray(columns)) return 0;
   for (const col of columns) {
@@ -150,3 +192,4 @@ function parseDurationFromColumns(columns) {
   }
   return 0;
 }
+ 
