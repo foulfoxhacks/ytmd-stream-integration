@@ -26,7 +26,6 @@ const ytmd = new YTMDClient({
   token: env.YTMD_TOKEN,
 });
 
-// Quick sanity ping so misconfig surfaces immediately rather than at first request.
 try {
   await ytmd.getCurrentSong();
   log.info('[ytmd] connected.');
@@ -42,6 +41,7 @@ const queue = new QueueManager({
   maxSongSeconds: parseInt(env.MAX_SONG_SECONDS || '420', 10),
   maxPerUser: parseInt(env.MAX_PER_USER || '2', 10),
   blocklist: (env.BLOCKLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
+  queuePosition: (env.QUEUE_POSITION || 'INSERT_AFTER_CURRENT_VIDEO').trim(),
   logger: log,
 });
 
