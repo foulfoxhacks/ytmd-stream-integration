@@ -5,18 +5,21 @@
 // pushing to YTMD.
 
 export class QueueManager {
-  constructor({ ytmd, cooldownSeconds, maxSongSeconds, maxPerUser, blocklist, logger = console }) {
+  constructor({ ytmd, cooldownSeconds, maxSongSeconds, maxPerUser, blocklist, queuePosition, logger = console }) {
     this.ytmd = ytmd;
     this.cooldown = (cooldownSeconds || 0) * 1000;
     this.maxSongSeconds = maxSongSeconds || 0;
     this.maxPerUser = maxPerUser || 0;
     this.blocklist = (blocklist || []).map((s) => s.toLowerCase()).filter(Boolean);
+    const validPositions = ['INSERT_AT_END', 'INSERT_AFTER_CURRENT_VIDEO'];
+    this.queuePosition = validPositions.includes(queuePosition)
+      ? queuePosition
+      : 'INSERT_AFTER_CURRENT_VIDEO';
     this.log = logger;
-    this.lastRequest = new Map(); // userKey -> timestamp ms
-    this.activeCount = new Map(); // userKey -> int
-    // Track each user's pending songs so !revoke can pull their last one out
-    // of the YTMD queue. Entry shape: { videoId, title }.
-    this.userQueue = new Map(); // userKey -> Array<{videoId, title}>
+    this.lastRequest = new Map();
+    this.activeCount = new Map();
+    // userKey -> Array<{videoId, title}> for !revoke
+    this.userQueue = new Map();
   }
 
   #userKey(platform, user) {
@@ -36,9 +39,6 @@ export class QueueManager {
     return this.blocklist.some((b) => lower.includes(b));
   }
 
-  /**
-   * @param {{user:string, query:string, platform:string, reply:(msg:string)=>void}} req
-   */
   async handleRequest({ user, query, platform, reply }) {
     const key = this.#userKey(platform, user);
     query = (query || '').trim();
@@ -88,7 +88,7 @@ export class QueueManager {
     }
 
     try {
-      await this.ytmd.addToQueue(song.videoId);
+      await this.ytmd.addToQueue(song.videoId, { insertPosition: this.queuePosition });
     } catch (err) {
       this.log.error('[ytmd.addToQueue] failed:', err.message);
       reply(`@${user} couldn't add that to the queue.`);
@@ -100,8 +100,6 @@ export class QueueManager {
     const arr = this.userQueue.get(key) || [];
     arr.push({ videoId: song.videoId, title: song.title });
     this.userQueue.set(key, arr);
-    // Best-effort: decay active count after the song's duration so per-user limits
-    // don't hold forever. Not perfect (skips, restarts) but good enough.
     if (song.durationSec > 0) {
       setTimeout(() => {
         const cur = this.activeCount.get(key) || 0;
@@ -143,11 +141,6 @@ export class QueueManager {
     }
   }
 
-  /**
-   * !revoke — remove the user's most recently queued song from YTMD.
-   * Looks up the live YTMD queue, finds the last item matching one of this
-   * user's pending videoIds, and deletes it by index.
-   */
   async handleRevoke({ user, platform, reply }) {
     const key = this.#userKey(platform, user);
     const list = this.userQueue.get(key) || [];
@@ -168,7 +161,6 @@ export class QueueManager {
 
     const idx = findQueueIndexByVideoId(queueData, target.videoId);
     if (idx == null || idx < 0) {
-      // It's no longer in the queue (already played or skipped). Just clean up state.
       list.pop();
       this.userQueue.set(key, list);
       const cur = this.activeCount.get(key) || 0;
@@ -220,11 +212,6 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
-/**
- * Walk the YTMD /queue payload and return the last queue index whose
- * videoId matches `videoId`. Returns null if not found.
- * The queue is a YouTube Music renderer tree; we scan defensively.
- */
 export function findQueueIndexByVideoId(queueData, videoId) {
   if (!queueData || !videoId) return null;
   const items = Array.isArray(queueData?.items) ? queueData.items : [];
