@@ -37,8 +37,6 @@ export function startYouTube({ channelId, commands, queue, skipAllowlist, log })
       await queue.handleQueuePeek({ user, reply });
     } else if (cmd === commands.skip) {
       await queue.handleSkip({ user, reply, allowlist: skipAllowlist });
-    } else if (cmd === commands.revoke) {
-      await queue.handleRevoke({ user, platform: 'youtube', reply });
     }
   });
 

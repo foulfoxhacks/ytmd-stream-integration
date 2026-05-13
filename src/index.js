@@ -26,6 +26,7 @@ const ytmd = new YTMDClient({
   token: env.YTMD_TOKEN,
 });
 
+// Quick sanity ping so misconfig surfaces immediately rather than at first request.
 try {
   await ytmd.getCurrentSong();
   log.info('[ytmd] connected.');
@@ -41,16 +42,14 @@ const queue = new QueueManager({
   maxSongSeconds: parseInt(env.MAX_SONG_SECONDS || '420', 10),
   maxPerUser: parseInt(env.MAX_PER_USER || '2', 10),
   blocklist: (env.BLOCKLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
-  queuePosition: (env.QUEUE_POSITION || 'INSERT_AFTER_CURRENT_VIDEO').trim(),
   logger: log,
 });
 
 const commands = {
-  request: (env.CMD_REQUEST || 'play').toLowerCase(),
-  nowPlaying: (env.CMD_NOWPLAYING || 'nowplaying').toLowerCase(),
-  queue: (env.CMD_QUEUE || 'songqueue').toLowerCase(),
+  request: (env.CMD_REQUEST || 'sr').toLowerCase(),
+  nowPlaying: (env.CMD_NOWPLAYING || 'np').toLowerCase(),
+  queue: (env.CMD_QUEUE || 'queue').toLowerCase(),
   skip: (env.CMD_SKIP || 'skip').toLowerCase(),
-  revoke: (env.CMD_REVOKE || 'revoke').toLowerCase(),
 };
 
 const skipAllowlist = (env.SKIP_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean);

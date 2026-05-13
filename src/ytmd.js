@@ -13,6 +13,11 @@ export class YTMDClient {
     this.token = token || '';
   }
 
+  /**
+   * Request a JWT for the given clientId.
+   * The user must approve the popup in Pear Desktop the first time.
+   * Returns the access token string.
+   */
   static async requestToken({ host, clientId }) {
     const url = `${host.replace(/\/+$/, '')}/auth/${encodeURIComponent(clientId)}`;
     const res = await fetch(url, { method: 'POST' });
@@ -42,27 +47,31 @@ export class YTMDClient {
     return ct.includes('application/json') ? res.json() : res.text();
   }
 
+  // --- Search ---
+  // POST /api/v1/search { query, params?, continuation? }
+  // Returns the raw YouTube Music search response. We dig out the first
+  // playable songVideo from it.
   async search(query) {
-    return this.#req('POST', `${API}/search`, { query });
+    const data = await this.#req('POST', `${API}/search`, { query });
+    return data;
   }
 
+  /**
+   * Search and return the first usable {videoId, title, artist, durationSec}
+   * or null if nothing matched.
+   */
   async findFirstSong(query) {
     const data = await this.search(query);
     return extractFirstSong(data);
   }
 
-  // insertPosition: 'INSERT_AT_END' or 'INSERT_AFTER_CURRENT_VIDEO'
-  async addToQueue(videoId, { insertPosition = 'INSERT_AFTER_CURRENT_VIDEO' } = {}) {
+  // --- Queue ---
+  async addToQueue(videoId, { insertPosition = 'INSERT_AT_END' } = {}) {
     return this.#req('POST', `${API}/queue`, { videoId, insertPosition });
   }
 
   async getQueue() {
-    try {
-      return await this.#req('GET', `${API}/queue`);
-    } catch (err) {
-      if (/->\s*4(?:0[34]|1\d)/.test(err.message)) return null;
-      throw err;
-    }
+    return this.#req('GET', `${API}/queue`);
   }
 
   async getCurrentSong() {
@@ -70,28 +79,26 @@ export class YTMDClient {
   }
 
   async getNextSong() {
-    try {
-      return await this.#req('GET', `${API}/queue/next`);
-    } catch (err) {
-      if (/->\s*4(?:0[34]|1\d)/.test(err.message)) return null;
-      throw err;
-    }
+    return this.#req('GET', `${API}/queue/next`);
   }
 
   async next() {
     return this.#req('POST', `${API}/next`);
   }
-
-  async removeFromQueue(index) {
-    return this.#req('DELETE', `${API}/queue/${encodeURIComponent(index)}`);
-  }
 }
 
+/**
+ * Walk a YouTube Music searchResponse and pick the first item that has a videoId
+ * and looks like a song. The shape is YouTube's internal renderer JSON; we
+ * defensively scan because it changes occasionally.
+ */
 export function extractFirstSong(data) {
   if (!data || typeof data !== 'object') return null;
+
   const found = [];
   walk(data, (node) => {
     if (!node || typeof node !== 'object') return;
+    // musicResponsiveListItemRenderer is the standard "row" in a search result.
     if (node.musicResponsiveListItemRenderer) {
       const r = node.musicResponsiveListItemRenderer;
       const videoId =
@@ -100,25 +107,12 @@ export function extractFirstSong(data) {
           ?.musicPlayButtonRenderer?.playNavigationEndpoint?.watchEndpoint?.videoId;
       if (!videoId) return;
       const title = textFromRuns(r.flexColumns?.[0]);
-      const subtitle = textFromRuns(r.flexColumns?.[1]);
+      const artistish = textFromRuns(r.flexColumns?.[1]);
       const durationSec = parseDurationFromColumns(r.flexColumns);
-      let score = 0;
-      if (durationSec > 0) score += 10;
-      if (/views?\b/i.test(subtitle)) score -= 5;
-      if (/\bSong\b/i.test(subtitle)) score += 5;
-      if (subtitle.split('•').length >= 2) score += 2;
-      const artist = subtitle
-        .replace(/\s*•\s*\d{1,2}:\d{2}(?::\d{2})?\s*$/, '')
-        .replace(/\s*•\s*[\d.]+[KMB]?\s+views?\s*$/i, '')
-        .replace(/^Song\s*•\s*/i, '')
-        .trim();
-      found.push({ videoId, title: title || '(unknown)', artist, durationSec, score });
+      found.push({ videoId, title: title || '(unknown)', artist: artistish || '', durationSec });
     }
   });
-  if (found.length === 0) return null;
-  found.sort((a, b) => b.score - a.score);
-  const best = found[0];
-  return { videoId: best.videoId, title: best.title, artist: best.artist, durationSec: best.durationSec };
+  return found[0] || null;
 }
 
 function walk(node, visit, seen = new WeakSet()) {
@@ -145,9 +139,7 @@ function parseDurationFromColumns(columns) {
     const txt = textFromRuns(col);
     const m = txt.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
     if (m) {
-      const a = Number(m[1]);
-      const b = Number(m[2]);
-      const c = m[3] ? Number(m[3]) : null;
+      const a = +m[1], b = +m[2], c = m[3] ? +m[3] : null;
       return c == null ? a * 60 + b : a * 3600 + b * 60 + c;
     }
   }

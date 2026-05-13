@@ -7,7 +7,7 @@ export function startTwitch({ channel, username, oauth, commands, queue, skipAll
     return null;
   }
   if (!username || !oauth) {
-    log.warn('[twitch] TWITCH_USERNAME or TWITCH_OAUTH missing — skipping');
+    log.warn('[twitch] TWITCH_USERNAME or TWITCH_OAUTH missing - skipping');
     return null;
   }
 
@@ -41,8 +41,6 @@ export function startTwitch({ channel, username, oauth, commands, queue, skipAll
       await queue.handleQueuePeek({ user, reply });
     } else if (cmd === commands.skip) {
       await queue.handleSkip({ user, reply, allowlist: skipAllowlist });
-    } else if (cmd === commands.revoke) {
-      await queue.handleRevoke({ user, platform: 'twitch', reply });
     }
   });
 
