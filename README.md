@@ -2,19 +2,18 @@
 
 Chat-driven song requests for **[Pear Desktop](https://github.com/th-ch/youtube-music)** (the YouTube Music Desktop App). Bridges **Twitch**, **TikTok Live** (via [TikFinity](https://tikfinity.zerody.one/)) and **YouTube Live** chat into a single song-request queue that plays through your local YouTube Music app.
 
-- `!play <song name>` from any platform → searched on YouTube Music → added to your queue
-- `!revoke` lets a viewer pull back the last song they requested
-- `!nowplaying`, `!songqueue`, `!skip` for status and moderation
+- `!sr <song name>` from any platform -> searched on YouTube Music -> added to your queue
 - Per-user cooldowns, max song length, and a blocklist
-- One Node.js process — no cloud, no dependencies on third-party services
+- Optional `!np`, `!queue`, `!skip` commands
+- One Node.js process - no cloud, no dependencies on third-party services
 - MIT licensed
 
 ## How it works
 
 ```
- Twitch chat ──┐
- TikTok chat ──┼──► ytmd-stream-integration ──► Pear Desktop API Server ──► your queue
- YouTube chat ─┘            (this bot)              (localhost:26538)
+ Twitch chat ---\
+ TikTok chat ----> ytmd-stream-integration ----> Pear Desktop API Server ----> your queue
+ YouTube chat --/            (this bot)              (localhost:26538)
 ```
 
 TikTok works through TikFinity: configure a TikFinity custom command with a Webhook action that POSTs to this bot. Twitch and YouTube are read directly via their chat APIs.
@@ -31,7 +30,7 @@ TikTok works through TikFinity: configure a TikFinity custom command with a Webh
 
 ### 1. Enable the Pear Desktop API Server
 
-Open Pear Desktop → **Settings → Plugins → API Server** → enable it. Default port is `26538`. Leave it on `127.0.0.1` (localhost) unless you know what you're doing.
+Open Pear Desktop -> **Settings -> Plugins -> API Server** -> enable it. Default port is `26538`. Leave it on `127.0.0.1` (localhost) unless you know what you're doing.
 
 ### 2. Install the bot
 
@@ -42,7 +41,7 @@ npm install
 cp .env.example .env
 ```
 
-Open `.env` in a text editor — you'll fill it in over the next few steps.
+Open `.env` in a text editor - you'll fill it in over the next few steps.
 
 ### 3. Get a YTMD auth token
 
@@ -60,15 +59,15 @@ Paste that into your `.env`.
 
 ### 4. Configure the platforms you want
 
-You can enable any subset — leave the others blank.
+You can enable any subset - leave the others blank.
 
-**Twitch.** Set `TWITCH_CHANNEL` (your channel name, lowercase), `TWITCH_USERNAME` (the bot account, can be your own), and `TWITCH_OAUTH` (an OAuth token, format `oauth:xxxx`). Easiest way to get a token: [twitchtokengenerator.com](https://twitchtokengenerator.com/) → "Bot Chat Token".
+**Twitch.** Set `TWITCH_CHANNEL` (your channel name, lowercase), `TWITCH_USERNAME` (the bot account, can be your own), and `TWITCH_OAUTH` (an OAuth token, format `oauth:xxxx`). Easiest way to get a token: [twitchtokengenerator.com](https://twitchtokengenerator.com/) -> "Bot Chat Token".
 
 **YouTube Live.** Set `YOUTUBE_CHANNEL_ID` to your channel ID (find it at [youtube.com/account_advanced](https://www.youtube.com/account_advanced)). Note: YouTube chat is read-only here, so command replies show in the bot's terminal, not in chat. If you want viewers to see replies on YouTube, mirror them through Nightbot or similar.
 
 **TikTok via TikFinity.** Leave `TIKFINITY_PORT=7280` (or change it), then in TikFinity:
 
-1. Create a new custom command, e.g. trigger word `!play`
+1. Create a new custom command, e.g. trigger word `!sr`
 2. Add an action of type **Webhook**
 3. URL: `http://127.0.0.1:7280/tikfinity`
 4. Method: `POST`, Content-Type: `application/json`
@@ -76,18 +75,10 @@ You can enable any subset — leave the others blank.
    ```json
    {"user": "{username}", "query": "{message}"}
    ```
-   (TikFinity variables vary by version — `{username}` and `{message}` are the common ones; check TikFinity's variable list.)
+   (TikFinity variables vary by version - `{username}` and `{message}` are the common ones; check TikFinity's variable list.)
 6. (Optional) Set `TIKFINITY_SECRET` in `.env` and add a request header `X-Webhook-Secret: <same value>`.
 
-Repeat for the other commands:
-
-| Trigger | Webhook path |
-|---|---|
-| `!play` | `/tikfinity` |
-| `!skip` | `/tikfinity/skip` |
-| `!revoke` | `/tikfinity/revoke` |
-| `!nowplaying` | `/tikfinity/np` |
-| `!songqueue` | `/tikfinity/queue` |
+Repeat for `!np` -> `/tikfinity/np`, `!queue` -> `/tikfinity/queue`, `!skip` -> `/tikfinity/skip` if you want them.
 
 ### 5. Run
 
@@ -105,46 +96,43 @@ You should see something like:
 ytmd-stream-integration is running. Press Ctrl+C to quit.
 ```
 
-Have someone in any of your chats type `!play never gonna give you up`. The bot replies in chat (Twitch + TikTok) and the song appears in your YouTube Music queue.
+Have someone in any of your chats type `!sr never gonna give you up`. The bot replies in chat (Twitch + TikTok) and the song appears in your YouTube Music queue.
 
 ## Commands
 
 | Command | What it does | Who can use it |
 |---|---|---|
-| `!play <song>` | Search YouTube Music and add to queue | Everyone |
-| `!revoke` | Remove your most recently queued song | The user who requested it |
-| `!nowplaying` | Show currently playing song | Everyone |
-| `!songqueue` | Show next song in queue | Everyone |
+| `!sr <song>` | Search YouTube Music and add to queue | Everyone |
+| `!np` | Show currently playing song | Everyone |
+| `!queue` | Show next song in queue | Everyone |
 | `!skip` | Skip the current song | Only users in `SKIP_ALLOWLIST` |
 
-The `!play` / `!skip` / `!revoke` triplet matches the TikFinity Spotify integration's command names, so existing TikFinity command setups can mostly be reused.
-
-Command names are configurable in `.env` (`CMD_REQUEST`, `CMD_NOWPLAYING`, `CMD_QUEUE`, `CMD_SKIP`, `CMD_REVOKE`).
+Command names are configurable in `.env` (`CMD_REQUEST`, `CMD_NOWPLAYING`, etc.).
 
 ## Queue rules
 
 Configured in `.env`:
 
-- `COOLDOWN_SECONDS` — per-user cooldown between requests (default 60)
-- `MAX_SONG_SECONDS` — reject songs longer than this (default 420 = 7 min, set 0 to disable)
-- `MAX_PER_USER` — max simultaneous queued songs per user (default 2)
-- `BLOCKLIST` — comma-separated lowercase substrings to reject in title/artist/query
+- `COOLDOWN_SECONDS` - per-user cooldown between requests (default 60)
+- `MAX_SONG_SECONDS` - reject songs longer than this (default 420 = 7 min, set 0 to disable)
+- `MAX_PER_USER` - max simultaneous queued songs per user (default 2)
+- `BLOCKLIST` - comma-separated lowercase substrings to reject in title/artist/query
 
 ## Troubleshooting
 
-**"YTMD connection check failed"** — Pear Desktop isn't running, the API Server plugin isn't enabled, the port doesn't match, or the token is stale. Re-run `npm run auth`.
+**"YTMD connection check failed"** - Pear Desktop isn't running, the API Server plugin isn't enabled, the port doesn't match, or the token is stale. Re-run `npm run auth`.
 
-**Auth popup never appears** — Check Pear Desktop is in focus. The API Server plugin's auth strategy must be set to "Auth at first" (the default). If you set it to "None", you can skip `npm run auth` and put any string in `YTMD_TOKEN`.
+**Auth popup never appears** - Check Pear Desktop is in focus. The API Server plugin's auth strategy must be set to "Auth at first" (the default). If you set it to "None", you can skip `npm run auth` and put any string in `YTMD_TOKEN`.
 
-**Twitch bot connects but doesn't respond** — Verify the OAuth token has chat scope and matches the username. Tokens expire — regenerate if it's been a while.
+**Twitch bot connects but doesn't respond** - Verify the OAuth token has chat scope and matches the username. Tokens expire - regenerate if it's been a while.
 
-**TikFinity webhook returns 403** — `TIKFINITY_SECRET` doesn't match the `X-Webhook-Secret` header.
+**TikFinity webhook returns 403** - `TIKFINITY_SECRET` doesn't match the `X-Webhook-Secret` header.
 
-**Songs come back as "no results"** — Try a more specific query (artist + title). The bot picks the first songVideo result.
+**Songs come back as "no results"** - Try a more specific query (artist + title). The bot picks the first songVideo result.
 
 ## Security notes
 
-- The bot listens on `127.0.0.1` only — not exposed to the internet.
+- The bot listens on `127.0.0.1` only - not exposed to the internet.
 - Never commit your `.env` file. `.gitignore` already excludes it.
 - If you change `YTMD_CLIENT_ID`, you'll have to re-approve in Pear Desktop and get a new token.
 - The Twitch OAuth token gives chat access to your bot account. Treat it like a password.
@@ -153,7 +141,7 @@ Configured in `.env`:
 
 ```
 src/
-  index.js              entrypoint — wires everything together
+  index.js              entrypoint - wires everything together
   ytmd.js               client for the Pear Desktop API Server
   auth.js               one-shot script for getting a YTMD token
   queue-manager.js      cooldown / length / blocklist enforcement
@@ -169,7 +157,7 @@ PRs welcome. Ideas: an approval-queue UI, votes-to-skip, per-platform command al
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Built by [Aleksandr "Sammy" Freyermuth](https://github.com/foulfoxhacks).
+MIT - see [LICENSE](LICENSE). Built by [Aleksandr "Sammy" Freyermuth](https://github.com/foulfoxhacks).
 
 ## Acknowledgements
 
